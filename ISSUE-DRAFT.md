@@ -53,4 +53,4 @@ without deeper changes.
 no cache for, and plugins with hooks then fail in ways that block prompts. Some
 signal that plugin enablement is profile-scoped state would help.
 
-Script and full write-up: <your repo URL>
+Script and full write-up: https://github.com/Thoe657/claude-multiple-profiles
