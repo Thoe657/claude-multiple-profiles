@@ -1,7 +1,7 @@
-# claude-profiles
+# claude-multiple-profiles
 
-Run two (or more) Claude accounts side by side on one Windows machine — a personal
-account and a work one — without signing in and out, and without doing work under
+Run two (or more) Claude accounts side by side on one Windows machine - a personal
+account and a work one - without signing in and out, and without doing work under
 the wrong identity by accident.
 
 PowerShell, no dependencies, no admin rights.
@@ -11,7 +11,7 @@ PowerShell, no dependencies, no admin rights.
 ## Why this exists
 
 Claude has no built-in account switcher. Usage limits are per-account and never
-pool between them, so the risk isn't billing crossover — it's *context* crossover:
+pool between them, so the risk isn't billing crossover - it's *context* crossover:
 burning work quota on personal tasks, or worse, doing work in a personal account
 whose conversations live outside your employer's organisation.
 
@@ -19,7 +19,7 @@ Two surfaces need separating, and they behave differently:
 
 | Surface | Mechanism | Support |
 |---|---|---|
-| Claude Code CLI | `CLAUDE_CONFIG_DIR` relocates the whole `~/.claude` tree — settings, `CLAUDE.md`, skills, agents, plugins, sessions **and auth** | Documented and supported |
+| Claude Code CLI | `CLAUDE_CONFIG_DIR` relocates the whole `~/.claude` tree - settings, `CLAUDE.md`, skills, agents, plugins, sessions **and auth** | Documented and supported |
 | Desktop app | No equivalent env var. The live data directory is replaced with a junction pointing at one of several profile directories | Unsupported; works, with caveats |
 
 ---
@@ -28,7 +28,7 @@ Two surfaces need separating, and they behave differently:
 
 - Windows, PowerShell 5.1 or later
 - Claude Code CLI on `PATH` (for the CLI half)
-- Two Claude accounts on **different email addresses** — one address can't hold
+- Two Claude accounts on **different email addresses** - one address can't hold
   both a personal subscription and a Team/Enterprise seat
 
 ---
@@ -75,7 +75,7 @@ Rules of thumb:
 - **Keep one profile pointed at `%USERPROFILE%\.claude`.** That's what plain
   `claude` uses when no profile is active, and it's where your existing config
   already lives.
-- Name profiles whatever you like — `personal`, `work`, `client-a`. A `cc-<name>`
+- Name profiles whatever you like - `personal`, `work`, `client-a`. A `cc-<name>`
   shortcut is generated automatically for each one.
 - Add as many as you want; nothing is limited to two.
 
@@ -89,7 +89,7 @@ If your existing config lives somewhere unusual, point the entry straight at it:
 
 ## First-time setup
 
-Close the Claude desktop app completely — system tray included — then:
+Close the Claude desktop app completely - system tray included - then:
 
 ```powershell
 Initialize-ClaudeProfiles
@@ -107,7 +107,7 @@ Get-ClaudeProfileStatus
 ```
 
 You should see each profile, the email signed in on it, and how your desktop app
-is installed. **That status output is your ground truth** — it reads each
+is installed. **That status output is your ground truth** - it reads each
 profile's `.claude.json` directly, so it can't be wrong about who is where.
 
 ### Signing in the second profile
@@ -196,12 +196,12 @@ Copy-ClaudeConventions -From personal -To client-a
 
 ### What never gets copied, and why
 
-**Identity and session state** — `.claude.json`, `.credentials.json`, `sessions/`,
+**Identity and session state** - `.claude.json`, `.credentials.json`, `sessions/`,
 `projects/`, `history/`, `todos/`, and friends. Copying these would drag one
 account's login into the other profile, which is the exact failure this tool
 exists to prevent. The copy function refuses them even if you ask by name.
 
-**Plugin enablement** — `settings.json` is *merged key by key* rather than
+**Plugin enablement** - `settings.json` is *merged key by key* rather than
 replaced, and `enabledPlugins` / `extraKnownMarketplaces` are always left alone.
 This matters: plugin caches are per-profile, so copying those keys makes the new
 profile auto-install plugins it has no cache for. Plugins with hooks then fire
@@ -262,7 +262,7 @@ Initialize-ClaudeProfiles -IncludeMsixDesktop
 Switch-ClaudeDesktop work -Launch -IAcceptTheRisk
 ```
 
-**This does work** — verified on Claude desktop 1.40609.0. The container follows
+**This does work** - verified on Claude desktop 1.40609.0. The container follows
 a junction that points out of its sandbox. Two caveats:
 
 - Windows can clear `LocalCache` on a package reset. Profile data lives in
@@ -281,13 +281,13 @@ manifest and then to classic install paths.
 
 ## Troubleshooting
 
-**`Get-ClaudeProfileStatus` isn't recognised** — the profile line didn't load.
+**`Get-ClaudeProfileStatus` isn't recognised** - the profile line didn't load.
 Check `Test-Path $PROFILE` and your execution policy, then open a new terminal.
 
-**"The live data folder is real, not a junction"** — run `Initialize-ClaudeProfiles`
+**"The live data folder is real, not a junction"** - run `Initialize-ClaudeProfiles`
 first, so the existing data is moved somewhere safe before a link replaces it.
 
-**Desktop switch appears to do nothing** — the app was still running, or the
+**Desktop switch appears to do nothing** - the app was still running, or the
 sandbox refused the link. Check `Get-ClaudeProfileStatus` for `active:`.
 
 **`-Launch` can't find the app**:
@@ -297,12 +297,12 @@ Get-ClaudeDesktopLaunchTarget          # what it resolved
 Get-StartApps | Where-Object Name -like '*Claude*'
 ```
 
-**A plugin hook blocks prompts on a new profile** — you copied `enabledPlugins`
+**A plugin hook blocks prompts on a new profile** - you copied `enabledPlugins`
 from an older version of this script, or by hand. Set the plugin to `false` in
 that profile's `settings.json`, and delete its stale cache under
 `<profile>\plugins\cache\`.
 
-**Something else looks wrong** — nothing here writes outside your profile
+**Something else looks wrong** - nothing here writes outside your profile
 directories, `%LOCALAPPDATA%\Claude-profiles\`, and the app's own data path. See
 Rollback.
 
@@ -318,7 +318,7 @@ Move-Item "$env:LOCALAPPDATA\Claude-profiles\personal" $LiveDataPath
 
 Get `$LiveDataPath` from `Get-ClaudeProfileStatus`. Then remove the
 `. "$env:USERPROFILE\.claude-profiles.ps1"` line from `$PROFILE`. CLI profiles are
-just directories — delete the ones you don't want.
+just directories - delete the ones you don't want.
 
 ---
 
@@ -342,12 +342,12 @@ cleanup destroys links rather than data.
 Collected while building this, in case they're useful upstream:
 
 - `CLAUDE_CONFIG_DIR` cleanly separates CLI profiles **including authentication**,
-  which makes it the supported answer for multi-account CLI use — but it isn't
+  which makes it the supported answer for multi-account CLI use - but it isn't
   documented as such.
 - The desktop app has no equivalent. A `CLAUDE_DATA_DIR` (or a native profile
   picker) would remove the need for this entire script.
 - On MSIX builds, the user data path is undocumented, and `%APPDATA%\Claude`
-  — the path most guides cite — does not exist.
+  - the path most guides cite - does not exist.
 - A junction inside the MSIX `LocalCache` pointing outside the container **is
   followed correctly** by the app. Desktop profile separation is therefore
   achievable on current builds.
@@ -362,7 +362,7 @@ Related issues: [#30565](https://github.com/anthropics/claude-code/issues/30565)
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE).
+MIT - see [LICENSE](LICENSE).
 
 Not affiliated with or endorsed by Anthropic. Relies on undocumented behaviour of
 the Claude desktop app that may change at any time.
