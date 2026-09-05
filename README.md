@@ -164,6 +164,24 @@ profile it's holding open. `-Force` closes it for you.
 Get-ClaudeProfileStatus
 ```
 
+If you run [claude-mem](https://github.com/thedotmack/claude-mem), that status --
+and `Switch-ClaudeDesktop ... -Launch` -- ends with one worker line per profile:
+
+```
+claude-mem workers
+  personal   ok    port 37777  pid 496
+             store: C:\Users\thedo\.claude-mem
+  work       ok    port 37778  pid 25488
+             store: C:\Users\thedo\.claude-mem-work
+```
+
+Two distinct stores and two distinct live pids is the only proof that memories
+and quota aren't crossing; a port listing alone isn't. The check reports only --
+a `down` line is fixed by opening a session on that profile, since the worker is
+started by claude-mem's SessionStart hook. See
+[Claude-mem-multiple-profiles.md](Claude-mem-multiple-profiles/Claude-mem-multiple-profiles.md)
+for the wiring each profile needs.
+
 ---
 
 ## Porting your conventions to a new profile

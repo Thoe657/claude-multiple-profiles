@@ -466,7 +466,88 @@ Re-run with -IAcceptTheRisk to proceed.
     catch { Write-Error $_.Exception.Message; return }
 
     Write-Host "desktop profile '$profileName' is now active" -ForegroundColor Green
-    if ($Launch) { Start-ClaudeDesktopApp }
+    if ($Launch) {
+        Start-ClaudeDesktopApp
+        Write-Host ""
+        Get-ClaudeMemWorkerStatus
+    }
+}
+
+# ============================================================== claude-mem
+
+# claude-mem keys its entire store off CLAUDE_MEM_DATA_DIR, which Claude Code
+# exports to hooks from the profile's settings.json 'env' block. When that fails
+# to reach a hook it falls back to ~/.claude-mem silently, so two profiles
+# sharing one store looks exactly like a healthy pair on a port listing. The
+# check that matters is distinct stores with distinct live pids.
+
+function Get-ClaudeMemDataDir {
+    [CmdletBinding()]
+    param([Parameter(Mandatory, Position = 0)][string]$ConfigDir)
+
+    $file = Join-Path $ConfigDir 'settings.json'
+    $dir = $null
+    if (Test-Path -LiteralPath $file) {
+        try { $dir = (Get-Content -LiteralPath $file -Raw | ConvertFrom-Json).env.CLAUDE_MEM_DATA_DIR } catch { }
+    }
+    if (-not $dir) { $dir = Join-Path $env:USERPROFILE '.claude-mem' }
+    return ([Environment]::ExpandEnvironmentVariables($dir)).TrimEnd('\')
+}
+
+function Get-ClaudeMemWorkerStatus {
+    <#
+    .SYNOPSIS
+        One line per profile: memory store, worker port, live worker pid.
+    .DESCRIPTION
+        Reports only. Workers are started by the SessionStart hook, so the fix
+        for a 'down' line is to open a Claude session on that profile.
+    #>
+    [CmdletBinding()]
+    param()
+
+    Write-Host "claude-mem workers" -ForegroundColor White
+    $seenDir = @{}; $seenPid = @{}
+
+    foreach ($entry in $script:ClaudeCliProfiles.GetEnumerator()) {
+        $data = Get-ClaudeMemDataDir $entry.Value
+        if (-not (Test-Path -LiteralPath $data)) {
+            Write-Host ("  {0,-10} no memory store ({1})" -f $entry.Key, $data) -ForegroundColor DarkGray
+            continue
+        }
+
+        $port = 37777
+        try {
+            $p = (Get-Content -LiteralPath (Join-Path $data 'settings.json') -Raw |
+                  ConvertFrom-Json).CLAUDE_MEM_WORKER_PORT
+            if ($p) { $port = [int]$p }
+        } catch { }
+
+        $workerPid = $null
+        try {
+            $workerPid = (Get-Content -LiteralPath (Join-Path $data 'supervisor.json') -Raw |
+                          ConvertFrom-Json).processes.worker.pid
+        } catch { }
+
+        # supervisor.json is written optimistically and goes stale; trust the process.
+        $alive     = [bool]($workerPid -and (Get-Process -Id $workerPid -ErrorAction SilentlyContinue))
+        $listening = [bool](Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+
+        $state  = if ($alive -and $listening) { 'ok  ' } else { 'down' }
+        $colour = if ($alive -and $listening) { 'Green' } else { 'DarkYellow' }
+        $pidTxt = if ($alive) { "pid $workerPid" } elseif ($workerPid) { "pid $workerPid (dead)" } else { 'no pid' }
+        Write-Host ("  {0,-10} {1}  port {2}  {3}" -f $entry.Key, $state, $port, $pidTxt) -ForegroundColor $colour
+        Write-Host ("             store: {0}" -f $data) -ForegroundColor DarkGray
+
+        if ($seenDir.ContainsKey($data)) {
+            Write-Host ("             shares its store with '{0}' -- memories and quota will cross" -f $seenDir[$data]) -ForegroundColor Red
+        } else { $seenDir[$data] = $entry.Key }
+
+        if ($alive) {
+            if ($seenPid.ContainsKey($workerPid)) {
+                Write-Host ("             same worker as '{0}' -- CLAUDE_MEM_DATA_DIR is not reaching the hook" -f $seenPid[$workerPid]) -ForegroundColor Red
+            } else { $seenPid[$workerPid] = $entry.Key }
+        }
+    }
 }
 
 # ============================================================== porting config
@@ -690,6 +771,9 @@ function Get-ClaudeProfileStatus {
         }
     }
     Write-Host ("  running: {0}" -f $(if (Test-ClaudeDesktopRunning) { 'yes' } else { 'no' })) -ForegroundColor DarkGray
+
+    Write-Host ""
+    Get-ClaudeMemWorkerStatus
 
     Write-Host ""
     $cmd = Get-Command claude -ErrorAction SilentlyContinue
