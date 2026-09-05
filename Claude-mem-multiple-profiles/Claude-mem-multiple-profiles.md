@@ -218,6 +218,15 @@ If the env var fails to reach a hook, it reads the **default** store's `settings
 — which names `C:\Users\thedo\.claude-mem` — and lands there with no error or warning.
 This is why the pid comparison is the check that matters.
 
+**`status` reports a version that lags `package.json`.** A worker running from the
+`13.24.0` cache reports `Version: 13.23.1`, freshly restarted. That string is a
+build-time constant minified into `worker-service.cjs` (four literals); 13.24.0 was
+released without bumping it. Not a stale daemon, and it cannot trigger the mismatch
+kill above -- that compares the running worker's reported version against the constant
+in the bundle about to spawn it, so both sides read the same string and always agree.
+The 09-02 outage was two *different* bundles, which is the real divergence. Cosmetic;
+patching it means editing a vendored build artifact that `autoUpdate` overwrites.
+
 ## Rejected: one worker serving both accounts
 
 **Rejected, 2026-09-03.** Both bindings are module-level constants in
