@@ -128,8 +128,14 @@ function Get-ClaudeCliProfilePath {
 }
 
 function Get-ClaudeDesktopProfilePath {
+    # CLAUDE_DESKTOP_DIR_<PROFILE> overrides where a profile's desktop data
+    # lives, for directories that already exist under a different name. Set it
+    # in $PROFILE, same as CLAUDE_PROFILE_DIR_<PROFILE> for the CLI side.
     param([Parameter(Mandatory)][string]$Name)
-    return Join-Path $script:ClaudeDesktopStore (Resolve-ClaudeProfileName $Name)
+    $n = Resolve-ClaudeProfileName $Name
+    $override = [Environment]::GetEnvironmentVariable("CLAUDE_DESKTOP_DIR_$($n.ToUpper())")
+    if ($override) { return $override }
+    return Join-Path $script:ClaudeDesktopStore $n
 }
 
 function Test-IsJunction {

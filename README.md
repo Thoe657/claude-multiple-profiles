@@ -49,7 +49,14 @@ If your profile directories are named something other than `.claude` and
 line, so a reinstall can't undo it:
 
 ```powershell
-$env:CLAUDE_PROFILE_DIR_WORK = "$env:USERPROFILE\.claude-fullon"
+$env:CLAUDE_PROFILE_DIR_WORK = "$env:USERPROFILE\.claude-acme"
+```
+
+`CLAUDE_DESKTOP_DIR_<PROFILE>` does the same for that profile's desktop data
+directory, which otherwise defaults to `%LOCALAPPDATA%\Claude-profiles\<name>`:
+
+```powershell
+$env:CLAUDE_DESKTOP_DIR_WORK = "$env:LOCALAPPDATA\Claude-profilescme"
 ```
 
 Open a new terminal and check it loaded:
