@@ -30,9 +30,15 @@
 #
 # 'personal' maps to %USERPROFILE%\.claude, which is also what plain `claude`
 # uses when no profile is active -- keep one profile pointed there.
+#
+# If your directories are named differently, set CLAUDE_PROFILE_DIR_PERSONAL /
+# CLAUDE_PROFILE_DIR_WORK in your PowerShell profile before dot-sourcing this
+# file. Editing the map below works too, but is lost the next time you reinstall.
 $script:ClaudeCliProfiles = [ordered]@{
-    'personal' = Join-Path $env:USERPROFILE '.claude'
-    'work'     = Join-Path $env:USERPROFILE '.claude-work'
+    'personal' = if ($env:CLAUDE_PROFILE_DIR_PERSONAL) { $env:CLAUDE_PROFILE_DIR_PERSONAL }
+                 else { Join-Path $env:USERPROFILE '.claude' }
+    'work'     = if ($env:CLAUDE_PROFILE_DIR_WORK) { $env:CLAUDE_PROFILE_DIR_WORK }
+                 else { Join-Path $env:USERPROFILE '.claude-work' }
 }
 
 # Where each profile's desktop-app data is kept. Deliberately outside any app
@@ -509,6 +515,13 @@ function Get-ClaudeMemWorkerStatus {
     $seenDir = @{}; $seenPid = @{}
 
     foreach ($entry in $script:ClaudeCliProfiles.GetEnumerator()) {
+        # No profile dir means no settings.json to read, and Get-ClaudeMemDataDir
+        # would fall back to the default store -- which looks exactly like two
+        # profiles sharing one worker. Say what is actually wrong instead.
+        if (-not (Test-Path -LiteralPath $entry.Value)) {
+            Write-Host ("  {0,-10} no profile directory ({1})" -f $entry.Key, $entry.Value) -ForegroundColor DarkYellow
+            continue
+        }
         $data = Get-ClaudeMemDataDir $entry.Value
         if (-not (Test-Path -LiteralPath $data)) {
             Write-Host ("  {0,-10} no memory store ({1})" -f $entry.Key, $data) -ForegroundColor DarkGray

@@ -44,6 +44,14 @@ if (!(Test-Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force }
 Add-Content $PROFILE '. "$env:USERPROFILE\.claude-profiles.ps1"'
 ```
 
+If your profile directories are named something other than `.claude` and
+`.claude-work`, point the script at them from `$PROFILE` *above* the dot-source
+line, so a reinstall can't undo it:
+
+```powershell
+$env:CLAUDE_PROFILE_DIR_WORK = "$env:USERPROFILE\.claude-fullon"
+```
+
 Open a new terminal and check it loaded:
 
 ```powershell
