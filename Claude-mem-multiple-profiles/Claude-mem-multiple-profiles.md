@@ -4,6 +4,12 @@ Status: both workers running and verified separate, 2026-09-05. Both profiles on
 claude-mem 13.24.0. Both marketplaces are github sources. The 09-03 version-mismatch
 issue is closed; see *Outage log* for what actually broke afterwards.
 
+Directory names here follow the script's `personal` / `work` profile convention.
+If yours are named differently, map them with `CLAUDE_PROFILE_DIR_WORK` and
+`CLAUDE_DESKTOP_DIR_WORK` in `$PROFILE` rather than renaming anything -- the CLI
+directory's absolute path is embedded in `plugins/installed_plugins.json` and
+`known_marketplaces.json`. See the README's Install section.
+
 ## How claude-mem finds its data dir
 
 `scripts/bun-runner.js`:
@@ -28,9 +34,9 @@ therefore matter when running lifecycle commands by hand (see below).
 | Profile (`CLAUDE_CONFIG_DIR`) | Memory store (`CLAUDE_MEM_DATA_DIR`) | Worker port | Server port | Redis prefix | Version |
 |---|---|---|---|---|---|
 | `~\.claude` (default) | `~\.claude-mem` | 37777 | 37954 | `claude_mem_37777` | 13.24.0 |
-| `~\.claude-fullon` | `~\.claude-mem-fullon` | 37778 | 37955 | `claude_mem_37778` | 13.24.0 |
+| `~\.claude-work` | `~\.claude-mem-work` | 37778 | 37955 | `claude_mem_37778` | 13.24.0 |
 
-`~\.claude-mem-fullon` was created as a byte-for-byte copy of `~\.claude-mem`
+`~\.claude-mem-work` was created as a byte-for-byte copy of `~\.claude-mem`
 (same `claude-mem.db`, same `installId` in `backfill.json`), so every one of these
 values collided before the fix — two workers would have fought over port 37777 and,
 worse, both written the same SQLite file.
@@ -42,31 +48,31 @@ Both profiles now resolve claude-mem from the same upstream repo, independently:
 | Profile | `source` | `autoUpdate` |
 |---|---|---|
 | `~\.claude` | `github: thedotmack/claude-mem` | `true` |
-| `~\.claude-fullon` | `github: thedotmack/claude-mem` | absent (manual) |
+| `~\.claude-work` | `github: thedotmack/claude-mem` | absent (manual) |
 
-Fullon was originally a `directory` source pointing at its own `installLocation` —
+The work profile was originally a `directory` source pointing at its own `installLocation` —
 a self-referential copy taken from the default profile's checkout on 09-03. That
 copy could never advance, and `/plugin update` correctly reported "latest" against
 a checkout frozen at 13.21.2. Re-added as a github source on 09-05.
 
 `autoUpdate: true` on the default profile is what silently moved it 13.15.3 → 13.24.0
-and produced the broken install below. Fullon is deliberately left manual.
+and produced the broken install below. The work profile is deliberately left manual.
 
 ## Changes applied
 
-`~\.claude-fullon\settings.json`
+`~\.claude-work\settings.json`
 
 ```json
 "env": {
   "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
-  "CLAUDE_MEM_DATA_DIR": "C:\\Users\\thedo\\.claude-mem-fullon"
+  "CLAUDE_MEM_DATA_DIR": "C:\\Users\\thedo\\.claude-mem-work"
 }
 ```
 
-`~\.claude-mem-fullon\settings.json`
+`~\.claude-mem-work\settings.json`
 
-- `CLAUDE_MEM_DATA_DIR` → `C:\Users\thedo\.claude-mem-fullon`
-- `CLAUDE_MEM_TRANSCRIPTS_CONFIG_PATH` → `C:\Users\thedo\.claude-mem-fullon\transcript-watch.json`
+- `CLAUDE_MEM_DATA_DIR` → `C:\Users\thedo\.claude-mem-work`
+- `CLAUDE_MEM_TRANSCRIPTS_CONFIG_PATH` → `C:\Users\thedo\.claude-mem-work\transcript-watch.json`
 - `CLAUDE_MEM_WORKER_PORT` → `37778`
 - `CLAUDE_MEM_QUEUE_REDIS_PREFIX` → `claude_mem_37778`
 - `CLAUDE_MEM_SERVER_URL` / `CLAUDE_MEM_SERVER_BETA_URL` → `http://127.0.0.1:37955`
@@ -103,11 +109,11 @@ node "$S\bun-runner.js" "$S\worker-service.cjs" stop
 Remove-Item Env:\CLAUDE_CONFIG_DIR, Env:\CLAUDE_MEM_DATA_DIR
 ```
 
-Same again with `.claude-fullon` / `.claude-mem-fullon` for the other store. Clear the
+Same again with `.claude-work` / `.claude-mem-work` for the other store. Clear the
 env afterwards so it does not leak into the next thing you run.
 
 Then **start each by opening a Claude Code session on that profile** (`cc-personal`,
-`cc-fullon`) rather than by hand — the SessionStart hook runs `worker-service.cjs start`
+`cc-work`) rather than by hand — the SessionStart hook runs `worker-service.cjs start`
 with the profile's env already applied, which is the whole point of the wiring above.
 
 ## Verifying
@@ -119,10 +125,10 @@ listeners; and a worker can be alive on the right port while the hook path is br
 ```powershell
 Get-NetTCPConnection -LocalPort 37777,37778 -State Listen
 (Get-Content "$env:USERPROFILE\.claude-mem\supervisor.json" | ConvertFrom-Json).processes.worker.pid
-(Get-Content "$env:USERPROFILE\.claude-mem-fullon\supervisor.json" | ConvertFrom-Json).processes.worker.pid
+(Get-Content "$env:USERPROFILE\.claude-mem-work\supervisor.json" | ConvertFrom-Json).processes.worker.pid
 ```
 
-Two listeners **and** two distinct pids. Same pid in both means the fullon session is
+Two listeners **and** two distinct pids. Same pid in both means the work session is
 still writing to the default store — `CLAUDE_MEM_DATA_DIR` is not reaching the hook.
 Check `logs/` in each store is advancing independently.
 
@@ -177,7 +183,7 @@ Bun v1.4.0 (Windows x64)
 
 That cache directory had a `node_modules` but no `zod` inside it — an incomplete
 extraction, not a change in 13.24.0. Every other cache on the machine (13.21.2,
-13.23.1, and fullon's later 13.24.0) has zod present, so this was a one-off.
+13.23.1, and the work profile's later 13.24.0) has zod present, so this was a one-off.
 
 **Check first when a worker dies before readiness with an empty log:**
 
@@ -193,9 +199,9 @@ and `bun.lock`, not `scripts\`).
 
 ## Traps worth remembering
 
-**`/plugin marketplace remove` can prune `enabledPlugins`.** After re-adding fullon's
+**`/plugin marketplace remove` can prune `enabledPlugins`.** After re-adding the work profile's
 marketplace as a github source, `claude-mem@thedotmack` was gone from
-`~\.claude-fullon\settings.json` — so `/plugin update` had nothing to resolve and just
+`~\.claude-work\settings.json` — so `/plugin update` had nothing to resolve and just
 opened the marketplace browser. Same thing had happened on the default profile without
 being noticed. Re-install rather than hand-editing, so the entry is written in whatever
 shape the current version expects.
@@ -257,12 +263,12 @@ undoes the separation on both axes.
 
 ## Known cosmetic leftovers
 
-In `~\.claude-mem-fullon`, inherited from the copy: `.worker-start-attempted` is stale
+In `~\.claude-mem-work`, inherited from the copy: `.worker-start-attempted` is stale
 and `.cleanup-v12.4.3-applied` records a backup path under `~\.claude-mem`. Historical
 records, rewritten or ignored on next start. `backfill.json` shares an `installId` with
 the default store; local-only, no effect observed.
 
 Orphaned caches retained as fallbacks: 13.21.2 and 13.23.1 on the default profile,
-13.21.2 on fullon. Safe to delete once 13.24.0 has proven itself. Note that falling
+13.21.2 on the work profile. Safe to delete once 13.24.0 has proven itself. Note that falling
 back requires pinning the marketplace to the same version, or the mismatch kill loop
 returns.
