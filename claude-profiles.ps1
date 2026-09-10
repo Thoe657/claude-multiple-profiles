@@ -127,6 +127,24 @@ function Get-ClaudeCliProfilePath {
     return $script:ClaudeCliProfiles[(Resolve-ClaudeProfileName $Name)]
 }
 
+function Get-ClaudeProfileNames {
+    # Public accessor: $script:ClaudeCliProfiles is private to this file's scope,
+    # so anything dot-sourcing it separately (the launcher) cannot read it.
+    return @($script:ClaudeCliProfiles.Keys)
+}
+
+function Get-ActiveClaudeDesktopProfile {
+    # Which profile the desktop data junction currently points at, or $null.
+    if (-not $script:ClaudeDesktopLive) { return $null }
+    if (-not (Test-IsJunction $script:ClaudeDesktopLive)) { return $null }
+    $t = Get-JunctionTarget $script:ClaudeDesktopLive
+    if (-not $t) { return $null }
+    foreach ($n in $script:ClaudeCliProfiles.Keys) {
+        if ($t.TrimEnd('\') -eq (Get-ClaudeDesktopProfilePath $n).TrimEnd('\')) { return $n }
+    }
+    return $null
+}
+
 function Get-ClaudeDesktopProfilePath {
     # CLAUDE_DESKTOP_DIR_<PROFILE> overrides where a profile's desktop data
     # lives, for directories that already exist under a different name. Set it
@@ -477,6 +495,21 @@ Re-run with -IAcceptTheRisk to proceed.
     try { New-VerifiedJunction -Path $script:ClaudeDesktopLive -Target $target }
     catch { Write-Error $_.Exception.Message; return }
 
+    # The junction only moves the desktop app's own data. Claude Code running
+    # inside the app is a separate thing that reads CLAUDE_CONFIG_DIR exactly
+    # like the CLI does, and inherits it from the app's process. Nothing else
+    # points it at a profile, so without this a Code tab writes its sessions,
+    # projects and refreshed OAuth tokens into ~/.claude no matter which account
+    # the app is signed into. User scope so Start-menu launches get it too;
+    # process scope so the -Launch below gets it without waiting for a refresh.
+    $cliDir = Get-ClaudeCliProfilePath $profileName
+    [Environment]::SetEnvironmentVariable('CLAUDE_CONFIG_DIR', $cliDir, 'User')
+    $env:CLAUDE_CONFIG_DIR = $cliDir
+    Write-Host "CLAUDE_CONFIG_DIR -> $cliDir" -ForegroundColor DarkGray
+    Write-Host "  (terminals already open keep the old value -- reopen them)" -ForegroundColor DarkGray
+
+    Start-ClaudeMemWorker $profileName
+
     Write-Host "desktop profile '$profileName' is now active" -ForegroundColor Green
     if ($Launch) {
         Start-ClaudeDesktopApp
@@ -506,13 +539,23 @@ function Get-ClaudeMemDataDir {
     return ([Environment]::ExpandEnvironmentVariables($dir)).TrimEnd('\')
 }
 
+function Get-ClaudeMemPort {
+    param([Parameter(Mandatory, Position = 0)][string]$DataDir)
+
+    try {
+        $p = (Get-Content -LiteralPath (Join-Path $DataDir 'settings.json') -Raw |
+              ConvertFrom-Json).CLAUDE_MEM_WORKER_PORT
+        if ($p) { return [int]$p }
+    } catch { }
+    return 37777
+}
+
 function Get-ClaudeMemWorkerStatus {
     <#
     .SYNOPSIS
         One line per profile: memory store, worker port, live worker pid.
     .DESCRIPTION
-        Reports only. Workers are started by the SessionStart hook, so the fix
-        for a 'down' line is to open a Claude session on that profile.
+        Reports only. The fix for a 'down' line is Start-ClaudeMemWorker.
     #>
     [CmdletBinding()]
     param()
@@ -534,12 +577,7 @@ function Get-ClaudeMemWorkerStatus {
             continue
         }
 
-        $port = 37777
-        try {
-            $p = (Get-Content -LiteralPath (Join-Path $data 'settings.json') -Raw |
-                  ConvertFrom-Json).CLAUDE_MEM_WORKER_PORT
-            if ($p) { $port = [int]$p }
-        } catch { }
+        $port = Get-ClaudeMemPort $data
 
         $workerPid = $null
         try {
@@ -566,6 +604,98 @@ function Get-ClaudeMemWorkerStatus {
                 Write-Host ("             same worker as '{0}' -- CLAUDE_MEM_DATA_DIR is not reaching the hook" -f $seenPid[$workerPid]) -ForegroundColor Red
             } else { $seenPid[$workerPid] = $entry.Key }
         }
+    }
+}
+
+function Stop-ClaudeMemWorker {
+    <#
+    .SYNOPSIS
+        Stops one profile's claude-mem worker.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory, Position = 0)][string]$Name)
+
+    $profileName = Resolve-ClaudeProfileName $Name
+    $dir = Get-ClaudeCliProfilePath $profileName
+    if (-not (Test-Path -LiteralPath $dir)) { return }
+    $data = Get-ClaudeMemDataDir $dir
+
+    $workerPid = $null
+    try {
+        $workerPid = (Get-Content -LiteralPath (Join-Path $data 'supervisor.json') -Raw |
+                      ConvertFrom-Json).processes.worker.pid
+    } catch { }
+
+    # supervisor.json goes stale, so also take whatever holds the profile's port.
+    $pids = @($workerPid) + @(Get-NetTCPConnection -LocalPort (Get-ClaudeMemPort $data) -State Listen -ErrorAction SilentlyContinue |
+                              Select-Object -ExpandProperty OwningProcess) |
+            Where-Object { $_ } | Select-Object -Unique
+    foreach ($p in $pids) {
+        if (Get-Process -Id $p -ErrorAction SilentlyContinue) {
+            Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
+            Write-Host "stopped claude-mem worker for '$profileName' (pid $p)" -ForegroundColor DarkGray
+        }
+    }
+}
+
+function Start-ClaudeMemWorker {
+    <#
+    .SYNOPSIS
+        Starts one profile's claude-mem worker if it is down, after stopping
+        every other profile's -- one worker at a time.
+    .DESCRIPTION
+        Normally the plugin's SessionStart hook does this, so the worker is
+        down until a session opens -- and a desktop Code tab without
+        CLAUDE_CONFIG_DIR runs the hooks of ~/.claude, whatever account is
+        signed in. This runs the hook's own command ('worker-service.cjs
+        start', a no-op when the worker is healthy) with the environment the
+        hook would have had, independent of any session.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory, Position = 0)][string]$Name)
+
+    $profileName = Resolve-ClaudeProfileName $Name
+    foreach ($other in $script:ClaudeCliProfiles.Keys) {
+        if ($other -ne $profileName) { Stop-ClaudeMemWorker $other }
+    }
+
+    $dir = Get-ClaudeCliProfilePath $profileName
+    # The hook's fallback when CLAUDE_PLUGIN_ROOT is unset: the newest cached
+    # version not marked orphaned.
+    $root = Get-ChildItem -LiteralPath (Join-Path $dir 'plugins\cache\thedotmack\claude-mem') -Directory -ErrorAction SilentlyContinue |
+            Where-Object { -not (Test-Path -LiteralPath (Join-Path $_.FullName '.orphaned_at')) -and
+                           (Test-Path -LiteralPath (Join-Path $_.FullName 'scripts\worker-service.cjs')) } |
+            Sort-Object { [version]($_.Name -replace '-.*') } -Descending |
+            Select-Object -First 1
+    if (-not $root) {
+        Write-Host "claude-mem is not installed on '$profileName'" -ForegroundColor DarkYellow
+        return
+    }
+
+    $settings = $null
+    try { $settings = Get-Content -LiteralPath (Join-Path $dir 'settings.json') -Raw | ConvertFrom-Json } catch { }
+    # The worker checks this itself and exits 0 without a word, so say it here.
+    if ($settings -and $settings.enabledPlugins.'claude-mem@thedotmack' -eq $false) {
+        Write-Host "claude-mem is disabled on '$profileName' (enabledPlugins in settings.json) -- its worker will not start" -ForegroundColor DarkYellow
+        return
+    }
+
+    # Hooks see CLAUDE_CONFIG_DIR plus the settings.json 'env' block, which is
+    # where CLAUDE_MEM_DATA_DIR -- the store, and through it the port -- lives.
+    $vars = @{ CLAUDE_CONFIG_DIR = $dir; CLAUDE_PLUGIN_ROOT = $root.FullName }
+    if ($settings.env) { foreach ($p in $settings.env.PSObject.Properties) { $vars[$p.Name] = [string]$p.Value } }
+
+    $saved = @{}
+    foreach ($k in $vars.Keys) {
+        $saved[$k] = [Environment]::GetEnvironmentVariable($k)
+        [Environment]::SetEnvironmentVariable($k, $vars[$k])
+    }
+    try {
+        $scripts = Join-Path $root.FullName 'scripts'
+        & node (Join-Path $scripts 'bun-runner.js') (Join-Path $scripts 'worker-service.cjs') start 2>&1 |
+            ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+    } finally {
+        foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
     }
 }
 
@@ -766,6 +896,15 @@ function Get-ClaudeProfileStatus {
     if (-not $active) {
         Write-Host "  (CLAUDE_CONFIG_DIR unset here -- plain 'claude' uses ~/.claude)" -ForegroundColor DarkGray
     }
+    # The user-scope value is what the desktop app inherits, and so what a Code
+    # tab writes to. A blank one means every Code tab lands in ~/.claude.
+    $userScope = [Environment]::GetEnvironmentVariable('CLAUDE_CONFIG_DIR', 'User')
+    if ($userScope) {
+        Write-Host ("  desktop Code tabs will use: {0}" -f $userScope) -ForegroundColor DarkGray
+    } else {
+        Write-Host "  desktop Code tabs will use ~/.claude regardless of the account signed in" -ForegroundColor Red
+        Write-Host "  -- run Switch-ClaudeDesktop to set CLAUDE_CONFIG_DIR at user scope" -ForegroundColor Red
+    }
 
     Write-Host ""
     Write-Host "Claude desktop" -ForegroundColor White
@@ -776,11 +915,7 @@ function Get-ClaudeProfileStatus {
         Write-Host ("  {0}" -f $kind) -ForegroundColor DarkGray
         Write-Host ("  data: {0}" -f $script:ClaudeDesktopLive) -ForegroundColor DarkGray
         if (Test-IsJunction $script:ClaudeDesktopLive) {
-            $t = Get-JunctionTarget $script:ClaudeDesktopLive
-            $activeName = $null
-            foreach ($n in $script:ClaudeCliProfiles.Keys) {
-                if ($t -and $t.TrimEnd('\') -eq (Get-ClaudeDesktopProfilePath $n).TrimEnd('\')) { $activeName = $n; break }
-            }
+            $activeName = Get-ActiveClaudeDesktopProfile
             if (-not $activeName) { $activeName = '(unrecognised target)' }
             Write-Host ("  active: {0}" -f $activeName) -ForegroundColor Cyan
         } elseif ($script:ClaudeDesktopIsMsix) {

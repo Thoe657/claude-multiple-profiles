@@ -143,6 +143,24 @@ Switch-ClaudeDesktop work -Launch
 
 ## Daily use
 
+**The launcher** (no command line)
+
+Double-click `Claude-Launcher.cmd`. Pick a profile and it closes every Claude
+instance, repoints the desktop data junction, sets `CLAUDE_CONFIG_DIR` at user
+scope, stops the other profile's claude-mem worker, starts this one's and
+relaunches the app. The rest of the menu is troubleshooting: full status, start
+or restart the active profile's worker, force-close Claude, update that
+profile's plugins.
+
+It is dot-sourced rather than run as a child script, because PowerShell resolves
+`$script:` against the *calling* script's scope -- a nested `.ps1` would see an
+empty profile map. Keep the `.` in the `.cmd` if you edit it.
+
+To pin it to the taskbar, make a shortcut whose target is `powershell.exe` with
+the same arguments as the `.cmd` -- Windows won't pin a shortcut to a `.cmd`.
+`claude-launcher.ico` is its icon: Clawd Thinking by
+[Icons8](https://icons8.com).
+
 **Claude Code CLI**
 
 ```powershell
@@ -173,6 +191,14 @@ Switch-ClaudeDesktop work -Launch
 because swapping the data directory underneath a live process corrupts whichever
 profile it's holding open. `-Force` closes it for you.
 
+Switching also sets `CLAUDE_CONFIG_DIR` at **user** scope, and that is the part
+that keeps the accounts apart. The junction only moves the desktop app's own
+data. Claude Code running *inside* the app is a separate thing that reads
+`CLAUDE_CONFIG_DIR` exactly like the CLI does and inherits it from the app's
+process -- so without it, a Code tab writes its sessions, projects and refreshed
+OAuth tokens into `~/.claude` no matter which account the app is signed into.
+Terminals already open keep their old value; reopen them.
+
 **Check state at any time**
 
 ```powershell
@@ -191,9 +217,14 @@ claude-mem workers
 ```
 
 Two distinct stores and two distinct live pids is the only proof that memories
-and quota aren't crossing; a port listing alone isn't. The check reports only --
-a `down` line is fixed by opening a session on that profile, since the worker is
-started by claude-mem's SessionStart hook. See
+and quota aren't crossing; a port listing alone isn't. The check reports only.
+Fix a `down` line with `Start-ClaudeMemWorker <profile>`, which stops every
+other profile's worker first -- one worker at a time, the active profile's.
+Switching does the same. A CLI session on the *other* profile still starts its
+own worker through claude-mem's SessionStart hook; that's needed for the
+session to have memory, and the next switch or `Start-ClaudeMemWorker` stops it
+again. If the plugin is disabled in a profile's `enabledPlugins`, the worker
+exits silently on start, and `Start-ClaudeMemWorker` says so. See
 [Claude-mem-multiple-profiles.md](Claude-mem-multiple-profiles/Claude-mem-multiple-profiles.md)
 for the wiring each profile needs.
 
