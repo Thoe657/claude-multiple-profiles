@@ -700,6 +700,106 @@ function Start-ClaudeMemWorker {
     }
 }
 
+# ============================================================== local models
+
+# Claude Code against a model Ollama serves, in a config dir of its own: an
+# account's plugins, hooks and CLAUDE.md would all spend context a small model
+# cannot spare, and its history and claude-mem store would fill with local
+# sessions. Terminal only -- the desktop app forces Anthropic's API on Code
+# tabs, and its third-party mode rejects non-Claude model names.
+$script:ClaudeLocalDir = Join-Path $env:USERPROFILE '.claude-local'
+$script:OllamaUrl      = 'http://localhost:11434'
+
+function Get-ClaudeLocalModels {
+    # Installed Ollama models that can call tools, with their trained context.
+    # Throws when Ollama is not running.
+    $tags = Invoke-RestMethod "$script:OllamaUrl/api/tags" -ErrorAction Stop
+    foreach ($m in $tags.models) {
+        if ($m.name -like 'cc-local*') { continue }
+        $show = Invoke-RestMethod "$script:OllamaUrl/api/show" -Method Post -ContentType 'application/json' `
+                                  -Body (@{ model = $m.name } | ConvertTo-Json)
+        if ($show.capabilities -notcontains 'tools') { continue }
+        $ctx = $show.model_info.PSObject.Properties | Where-Object Name -like '*.context_length' |
+               Select-Object -First 1 -ExpandProperty Value
+        [pscustomobject]@{ Name = $m.name; Context = $ctx }
+    }
+}
+
+function Start-ClaudeLocal {
+    <#
+    .SYNOPSIS
+        Runs Claude Code in this terminal against a local Ollama model.
+    .PARAMETER Context
+        Tokens of context. Claude Code's own prompt is ~7k tokens a turn with
+        the default tools and reserves room for a reply: 32k thrashes, 64k
+        works. More costs VRAM, and past the card Ollama spills onto the CPU.
+    .PARAMETER AllTools
+        Offer every built-in tool, not just shell and file ones. ~10k more
+        tokens a turn, and small models choose worse from a longer list.
+    .EXAMPLE
+        Start-ClaudeLocal qwen3.5:9b -Path C:\src\app -- -p "summarise README.md"
+        Claude Code's own flags go after --, or PowerShell reads -p as -Path.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, Position = 0)][string]$Model,
+        [int]$Context = 65536,
+        [string]$Path = (Get-Location).Path,
+        [switch]$AllTools,
+        [Parameter(ValueFromRemainingArguments)]$Arguments
+    )
+
+    # Ollama loads a model at its full trained window unless told otherwise
+    # (256k for Qwen3.5), and its Anthropic endpoint ignores per-request
+    # options. A derived model pins num_ctx and shares the original's weights.
+    $modelfile = Join-Path $env:TEMP 'cc-local.Modelfile'
+    "FROM $Model`nPARAMETER num_ctx $Context" | Set-Content -LiteralPath $modelfile -Encoding ascii
+    $out = & ollama create cc-local -f $modelfile 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ollama could not set up '$Model': $($out | Select-Object -Last 1)" -ForegroundColor Red
+        return
+    }
+    if (-not (Test-Path -LiteralPath $script:ClaudeLocalDir)) {
+        New-Item -ItemType Directory -Path $script:ClaudeLocalDir | Out-Null
+    }
+
+    $vars = @{
+        CLAUDE_CONFIG_DIR                        = $script:ClaudeLocalDir
+        ANTHROPIC_BASE_URL                       = $script:OllamaUrl
+        ANTHROPIC_AUTH_TOKEN                     = 'ollama'   # ignored by Ollama, required by Claude Code
+        # Inherited from a desktop Code tab's terminal; never hand them to another server.
+        ANTHROPIC_API_KEY                        = $null
+        CLAUDE_CODE_OAUTH_TOKEN                  = $null
+        # Every model slot, so background calls and subagents stay local too.
+        ANTHROPIC_MODEL                          = 'cc-local'
+        ANTHROPIC_DEFAULT_OPUS_MODEL             = 'cc-local'
+        ANTHROPIC_DEFAULT_SONNET_MODEL           = 'cc-local'
+        ANTHROPIC_DEFAULT_HAIKU_MODEL            = 'cc-local'
+        CLAUDE_CODE_SUBAGENT_MODEL               = 'cc-local'
+        # Unknown models are assumed to have 200k, so without this Ollama
+        # truncates silently long before auto-compact would run.
+        CLAUDE_CODE_MAX_CONTEXT_TOKENS           = "$Context"
+        # The reply reservation comes out of the window; the default eats most of 64k.
+        CLAUDE_CODE_MAX_OUTPUT_TOKENS            = '8192'
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = '1'
+    }
+    $tools = if ($AllTools) { @() } else { @('--tools', 'Bash,Read,Edit,Write,Glob,Grep') }
+
+    Push-Location -LiteralPath $Path -ErrorAction Stop
+    $saved = @{}
+    foreach ($k in $vars.Keys) {
+        $saved[$k] = [Environment]::GetEnvironmentVariable($k)
+        [Environment]::SetEnvironmentVariable($k, $vars[$k])
+    }
+    try {
+        Write-Host "[local] $Model, $Context tokens, in $Path" -ForegroundColor Cyan
+        & claude @tools @Arguments
+    } finally {
+        Pop-Location
+        foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+    }
+}
+
 # ============================================================== porting config
 
 function Merge-ClaudeSettings {

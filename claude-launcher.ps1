@@ -78,11 +78,57 @@ function Show-Menu {
     Write-Host ""
     Write-Host "   [s] full status          [r] start active profile's claude-mem worker" -ForegroundColor DarkGray
     Write-Host "   [k] force-close Claude   [w] restart claude-mem worker" -ForegroundColor DarkGray
-    Write-Host "   [q] quit                 [u] update plugins on active profile" -ForegroundColor DarkGray
+    Write-Host "   [l] local model (Ollama) [u] update plugins on active profile" -ForegroundColor DarkGray
+    Write-Host "   [q] quit" -ForegroundColor DarkGray
     Write-Host ""
 }
 
 function Wait-Key { Write-Host ""; Read-Host "enter to continue" | Out-Null }
+
+function Read-LocalContext {
+    # Numbered window sizes up to what the model was trained on; enter takes 64k.
+    # Returns $null when the answer is not a size.
+    param([int]$Max)
+    $sizes = @(@(65536, 131072, 262144) | Where-Object { -not $Max -or $_ -le $Max })
+    if (-not $sizes) { $sizes = @($Max) }   # trained on less than 64k: offer all it has
+    $notes = @{ 65536 = 'default, fastest'; 131072 = 'bigger tickets, slower'
+                262144 = 'slowest -- more of the model spills onto the CPU' }
+    Write-Host ""
+    Write-Host "  context window (below 64k Claude Code runs out of room and keeps compacting)" -ForegroundColor DarkGray
+    for ($i = 0; $i -lt $sizes.Count; $i++) {
+        Write-Host ("   [{0}] {1,4}k  {2}" -f ($i + 1), ($sizes[$i] / 1024), $notes[$sizes[$i]])
+    }
+    $a = (Read-Host "  context [1], or a size like 96k").Trim().ToLower()
+    if (-not $a) { return $sizes[0] }
+    if ($a -match '^\d$' -and [int]$a -ge 1 -and [int]$a -le $sizes.Count) { return $sizes[[int]$a - 1] }
+    if ($a -match '^(\d+)k$') { return [int]$Matches[1] * 1024 }
+    if ($a -match '^\d{4,}$') { return [int]$a }
+}
+
+function Read-LocalProject {
+    # Recent folders first (enter takes the newest), [b] opens a folder picker,
+    # anything else is a pasted path -- Explorer's "Copy as path" quotes included.
+    param([string[]]$Recent)
+    Write-Host ""
+    Write-Host "  project folder" -ForegroundColor DarkGray
+    for ($i = 0; $i -lt $Recent.Count; $i++) { Write-Host ("   [{0}] {1}" -f ($i + 1), $Recent[$i]) }
+    Write-Host "   [b] browse..."
+    $hint = if ($Recent) { '[1], b, or paste a path' } else { 'b, or paste a path' }
+    $a = (Read-Host "  project $hint").Trim().Trim('"')
+    if (-not $a -and $Recent) { return $Recent[0] }
+    if ($a -match '^\d+$' -and [int]$a -ge 1 -and [int]$a -le $Recent.Count) { return $Recent[[int]$a - 1] }
+    if ($a -eq 'b') {
+        Add-Type -AssemblyName System.Windows.Forms
+        $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+        $dlg.Description = 'Project folder for the local model'
+        if ($Recent) { $dlg.SelectedPath = $Recent[0] }
+        $owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true }   # else it can open behind the console
+        try { if ($dlg.ShowDialog($owner) -eq 'OK') { return $dlg.SelectedPath } }
+        finally { $owner.Dispose(); $dlg.Dispose() }
+        return
+    }
+    $a
+}
 
 while ($true) {
     Show-Menu
@@ -116,6 +162,37 @@ while ($true) {
             if ($active) { Update-ClaudePlugins $active }
             else { Write-Host "no active profile to update" -ForegroundColor DarkYellow }
             Wait-Key
+        }
+        'l' {
+            # Runs in this window and leaves the desktop profile, and its
+            # claude-mem worker, alone. /exit returns to the menu.
+            try { $models = @(Get-ClaudeLocalModels) }
+            catch { Write-Host "Ollama is not answering -- start it first" -ForegroundColor DarkYellow; Wait-Key; break }
+            if (-not $models) { Write-Host "no installed Ollama model can call tools -- ollama pull one" -ForegroundColor DarkYellow; Wait-Key; break }
+            Write-Host ""
+            for ($i = 0; $i -lt $models.Count; $i++) {
+                Write-Host ("   [{0}] {1,-48} trained on {2:n0} tokens" -f ($i + 1), $models[$i].Name, $models[$i].Context)
+            }
+            $pick = Read-Host "  model"
+            if ($pick -notmatch '^\d+$' -or [int]$pick -lt 1 -or [int]$pick -gt $models.Count) { break }
+            $model = $models[[int]$pick - 1]
+
+            $ctx = Read-LocalContext $model.Context
+            if (-not $ctx) { Write-Host "not a context size" -ForegroundColor DarkYellow; Wait-Key; break }
+
+            $recentFile = Join-Path $env:USERPROFILE '.claude-local\recent-projects.txt'
+            $recent = @(Get-Content -LiteralPath $recentFile -ErrorAction SilentlyContinue |
+                        Where-Object { Test-Path -LiteralPath $_ -PathType Container })
+            $path = Read-LocalProject $recent
+            if (-not $path -or -not (Test-Path -LiteralPath $path -PathType Container)) {
+                Write-Host "no such folder: $path" -ForegroundColor DarkYellow; Wait-Key; break
+            }
+            $path = (Resolve-Path -LiteralPath $path).Path
+            # Save before the session: closing the window mid-session skips anything after it.
+            New-Item -ItemType Directory -Force -Path (Split-Path $recentFile) | Out-Null
+            @($path) + ($recent | Where-Object { $_ -ne $path }) | Select-Object -First 5 |
+                Set-Content -LiteralPath $recentFile -ErrorAction SilentlyContinue
+            Start-ClaudeLocal $model.Name -Context $ctx -Path $path
         }
         'q' { return }
         default { }

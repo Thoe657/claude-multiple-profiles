@@ -228,6 +228,57 @@ exits silently on start, and `Start-ClaudeMemWorker` says so. See
 [Claude-mem-multiple-profiles.md](Claude-mem-multiple-profiles/Claude-mem-multiple-profiles.md)
 for the wiring each profile needs.
 
+**Local models (Ollama)**
+
+Launcher `[l]` lists the installed [Ollama](https://ollama.com) models that can
+call tools, then offers context sizes (64k/128k/256k, or type one like `96k`)
+and a project folder (the last five used, `b` for a folder picker, or a pasted
+path), and runs Claude Code in that window. `/exit` returns to the menu. From a terminal:
+
+```powershell
+Start-ClaudeLocal qwen3.5:9b -Path C:\src\app
+Start-ClaudeLocal qwen3.5:9b -Context 98304 -- --continue   # Claude's flags go after --
+```
+
+It uses Ollama's built-in Anthropic endpoint, so no router or proxy is needed.
+Sessions live in `~/.claude-local`, which has no account, plugins, hooks or
+`CLAUDE.md`. Each of those would spend context a small model can't spare, and
+local sessions would fill an account's history and claude-mem store. The desktop
+profile and its worker are left alone.
+
+**Terminal only.** The desktop app can't do this. It forces Anthropic's API
+address into every Code tab. Its third-party inference mode (Developer →
+Configure Third-Party Inference) accepts a gateway URL, but it drops model names
+it recognises as non-Claude (`qwen`, `llama`, `gemma` and so on).
+
+What `Start-ClaudeLocal` sets, and why:
+
+- **Context size, on both sides.** Ollama loads a model at its full trained
+  window unless told otherwise. Its Anthropic endpoint ignores per-request
+  options, so the function creates `cc-local`, a derived model with `num_ctx`
+  pinned. It shares the original's weights, so it takes no extra disk. Claude
+  Code assumes 200k for a model it doesn't know, so
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` makes it auto-compact before Ollama truncates.
+- **Every model slot points at `cc-local`,** so background calls and subagents
+  stay local too.
+- **The reply reservation is capped at 8k** (`CLAUDE_CODE_MAX_OUTPUT_TOKENS`).
+  The default takes most of a 64k window.
+- **Only Bash, Read, Edit, Write, Glob and Grep are offered.** `-AllTools`
+  restores the rest.
+
+Measured on 2026-09-11 (RTX 3060 Ti 8 GB, 32 GB RAM, Ollama 0.23, Claude Code
+2.1.268):
+
+| | |
+|---|---|
+| Claude Code's per-turn overhead | ~7k tokens with the default tools, ~17k with `-AllTools` |
+| 32k context | fails: "Prompt is too long", or auto-compact thrashes |
+| 64k context | works |
+| Qwen3.5-4B at 64k | 8.1 GB, 24% on CPU; edited a file correctly in 8 turns |
+| Same model with no context cap | Ollama loads 256k: 15 GB, 67% on CPU |
+| Qwen3.5-4B with `-AllTools` | lost track and asked for file permission it already had |
+| `qwen2.5-coder:7b` | writes tool calls as plain text instead of making them. It advertises tool support, so it still appears in the list, but it can't drive Claude Code |
+
 ---
 
 ## Porting your conventions to a new profile
