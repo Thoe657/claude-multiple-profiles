@@ -47,7 +47,7 @@ Both profiles now resolve claude-mem from the same upstream repo, independently:
 
 | Profile | `source` | `autoUpdate` |
 |---|---|---|
-| `~\.claude` | `github: thedotmack/claude-mem` | `true` |
+| `~\.claude` | `github: thedotmack/claude-mem` | `false` (set 2026-09-09) |
 | `~\.claude-work` | `github: thedotmack/claude-mem` | absent (manual) |
 
 The work profile was originally a `directory` source pointing at its own `installLocation` —
@@ -56,7 +56,9 @@ copy could never advance, and `/plugin update` correctly reported "latest" again
 a checkout frozen at 13.21.2. Re-added as a github source on 09-05.
 
 `autoUpdate: true` on the default profile is what silently moved it 13.15.3 → 13.24.0
-and produced the broken install below. The work profile is deliberately left manual.
+and produced the broken install below, and on 09-09 it was still walking the marketplace
+forward several releases a day (13.24.0 → 13.24.5 in two days). Turned off on 09-09 for
+the reasons in *Traps worth remembering*; both profiles are now manual.
 
 ## Changes applied
 
@@ -227,11 +229,45 @@ This is why the pid comparison is the check that matters.
 **`status` reports a version that lags `package.json`.** A worker running from the
 `13.24.0` cache reports `Version: 13.23.1`, freshly restarted. That string is a
 build-time constant minified into `worker-service.cjs` (four literals); 13.24.0 was
-released without bumping it. Not a stale daemon, and it cannot trigger the mismatch
-kill above -- that compares the running worker's reported version against the constant
-in the bundle about to spawn it, so both sides read the same string and always agree.
-The 09-02 outage was two *different* bundles, which is the real divergence. Cosmetic;
-patching it means editing a vendored build artifact that `autoUpdate` overwrites.
+released without bumping it, and 13.24.2 and 13.24.5 both still carry `"13.24.1"`.
+
+**This is not cosmetic. It is the mismatch kill.** (Corrected 2026-09-09; the earlier
+entry here claimed both sides read the same string. They do not.) The comparison is:
+
+- `workerVersion` = what the running worker returns from `GET /api/health` -- the baked constant.
+- `pluginVersion` = the `version` of the resolved spawn candidate, which for a cache
+  candidate is **the directory name**, not anything read out of the bundle.
+
+So a worker spawned from `cache/.../13.24.5/` reports `13.24.1` while the launcher calls
+it `13.24.5`, they never agree, and the worker is killed and respawned on *every hook
+event* -- i.e. on every tool call. Verified 2026-09-09 by A/B: same `hook claude-code
+context` invocation, worker pid unchanged with the fix below, pid changed without it.
+
+**Fix: `CLAUDE_MEM_WORKER_SCRIPT_PATH`** in the profile's `settings.json` `env` block.
+`resolveWorkerScript()` checks that override first and returns `{scriptPath, version: null}`;
+a null version becomes `pluginVersion: "unknown"`, and the comparator short-circuits to
+`matches: true` whenever `pluginVersion === "unknown"` or the health fetch returns nothing.
+It pins the spawn path as a side effect, which also rules out the marketplace-checkout
+candidate below. Applied to both profiles:
+
+```json
+"CLAUDE_MEM_WORKER_SCRIPT_PATH":
+  "C:\\Users\\thedo\\.claude\\plugins\\cache\\thedotmack\\claude-mem\\13.24.5\\scripts\\worker-service.cjs"
+```
+
+The path is version-pinned, so **update it by hand after every claude-mem update** or the
+hook spawns an orphaned cache dir. `autoUpdate` is now `false` on both profiles, so updates
+are deliberate; that is the whole reason this is tolerable.
+
+**The marketplace checkout is a spawn candidate and it cannot run.**
+`resolveWorkerScript()` builds its candidate list from the non-orphaned cache dirs *plus*
+`plugins/marketplaces/thedotmack/plugin/scripts/worker-service.cjs`, versioned by the
+marketplace **root** `package.json`, and takes the highest. That checkout has no
+`node_modules`, so a worker spawned from it dies at module load exactly like the 09-05
+zod failure -- `Worker port did not open after lazy-spawn`, no worker-side log line.
+With `autoUpdate: true` the marketplace is pulled ahead of the cache on every upstream
+release, which is precisely when the broken candidate wins the sort. On 09-09 the default
+profile logged 15 mismatch kills and 27 failed spawns before this was found.
 
 ## Rejected: one worker serving both accounts
 
