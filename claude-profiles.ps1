@@ -86,9 +86,8 @@ $script:ClaudeSettingsNeverMerge = @(
 
 function Find-ClaudeDesktopDataDir {
     <#
-      The live user-data directory is whichever folder holds
-      claude_desktop_config.json. Do not assume %APPDATA%\Claude -- Store (MSIX)
-      installs virtualise it into the package container.
+      Check app data locations only, never saved profiles or backups. Store
+      (MSIX) installs virtualise %APPDATA%\Claude into the package container.
     #>
     [CmdletBinding()]
     param()
@@ -98,12 +97,14 @@ function Find-ClaudeDesktopDataDir {
         (Join-Path $env:LOCALAPPDATA 'Programs\Claude'),
         (Join-Path $env:LOCALAPPDATA 'Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude')
     )
+    # A managed link remains authoritative even when its target is missing.
+    foreach ($c in $candidates) {
+        $item = Get-Item -LiteralPath $c -Force -ErrorAction SilentlyContinue
+        if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $c }
+    }
     foreach ($c in $candidates) {
         if (Test-Path -LiteralPath (Join-Path $c 'claude_desktop_config.json')) { return $c }
     }
-    $hit = Get-ChildItem $env:APPDATA, $env:LOCALAPPDATA -Filter 'claude_desktop_config.json' `
-             -Recurse -Force -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($hit) { return $hit.DirectoryName }
     return $null
 }
 
