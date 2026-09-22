@@ -26,10 +26,13 @@
 # ============================================================== configuration
 
 # Add, rename or remove profiles here. The key is the profile name you type;
-# the value is its config directory.
+# the value is its config directory. Rename freely -- functions below that
+# need a default profile (Initialize-ClaudeProfiles, Copy-ClaudeConventions)
+# always fall back to whichever key is listed first, so this map is the only
+# thing you need to edit.
 #
-# 'personal' maps to %USERPROFILE%\.claude, which is also what plain `claude`
-# uses when no profile is active -- keep one profile pointed there.
+# The first entry maps to %USERPROFILE%\.claude, which is also what plain
+# `claude` uses when no profile is active -- keep it pointed there.
 #
 # If your directories are named differently, set CLAUDE_PROFILE_DIR_PERSONAL /
 # CLAUDE_PROFILE_DIR_WORK in your PowerShell profile before dot-sourcing this
@@ -307,7 +310,7 @@ function Initialize-ClaudeProfiles {
     #>
     [CmdletBinding()]
     param(
-        [string]$AdoptDesktopDataAs = 'personal',
+        [string]$AdoptDesktopDataAs = @($script:ClaudeCliProfiles.Keys)[0],
         [switch]$IncludeMsixDesktop
     )
 
@@ -856,7 +859,7 @@ function Compare-ClaudeProfiles {
     #>
     [CmdletBinding()]
     param(
-        [string]$From = 'personal',
+        [string]$From = @($script:ClaudeCliProfiles.Keys)[0],
         [string]$To,
         [string]$FromPath,
         [string]$ToPath
@@ -919,7 +922,7 @@ function Copy-ClaudeConventions {
     #>
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     param(
-        [string]$From = 'personal',
+        [string]$From = @($script:ClaudeCliProfiles.Keys)[0],
         [string]$To,
         [string]$FromPath,
         [string]$ToPath,

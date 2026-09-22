@@ -4,7 +4,9 @@ Run two (or more) Claude accounts side by side on one Windows machine - a person
 account and a work one - without signing in and out, and without doing work under
 the wrong identity by accident.
 
-PowerShell, no dependencies, no admin rights.
+PowerShell, no dependencies, no admin rights. Includes a double-click launcher
+for switching profiles without touching a terminal - see
+[Daily use](#daily-use).
 
 ---
 
@@ -35,7 +37,21 @@ Two surfaces need separating, and they behave differently:
 
 ## Install
 
-Save `claude-profiles.ps1` somewhere stable and load it from your PowerShell profile:
+Clone the repo and `cd` into it - almost every command below is a relative
+path, and running one from wherever your terminal happened to open is the most
+common way this trips people up:
+
+```powershell
+git clone https://github.com/Thoe657/claude-multiple-profiles.git
+cd claude-multiple-profiles
+```
+
+Keep this folder somewhere stable rather than a temp download folder. The
+`Copy-Item` below only installs `claude-profiles.ps1` itself - the launcher
+(`Claude-Launcher.cmd`, `claude-launcher.ps1`) and its icon stay in this
+cloned folder and are run from here, not from `%USERPROFILE%`.
+
+Then load the script from your PowerShell profile:
 
 ```powershell
 Copy-Item .\claude-profiles.ps1 "$env:USERPROFILE\.claude-profiles.ps1"
@@ -93,6 +109,10 @@ Rules of thumb:
 - Name profiles whatever you like - `personal`, `work`, `client-a`. A `cc-<name>`
   shortcut is generated automatically for each one.
 - Add as many as you want; nothing is limited to two.
+- **Renaming is self-contained.** Every function that needs a default profile
+  (`Initialize-ClaudeProfiles`, `Copy-ClaudeConventions`) falls back to whichever
+  key is listed first in this map. Rename or reorder here and nothing else in
+  the script needs to change.
 
 If your existing config lives somewhere unusual, point the entry straight at it:
 
@@ -111,9 +131,15 @@ Initialize-ClaudeProfiles
 ```
 
 This creates each profile directory, and moves the desktop app's existing data
-into a profile slot so the live path can become a junction. By default the
-existing data is adopted as `personal`; use `-AdoptDesktopDataAs work` if it
-belongs to the other account.
+into a profile slot so the live path can become a junction. **Check which
+account is currently signed into the desktop app first** - that's what
+`-AdoptDesktopDataAs` claims. By default it's adopted as whichever profile is
+listed first in your map; pass `-AdoptDesktopDataAs <name>` if it belongs to a
+different one.
+
+On a Store/MSIX install this skips the desktop half entirely unless you add
+`-IncludeMsixDesktop` - see [Windows install types](#windows-install-types).
+Safe to re-run: it only creates directories that don't already exist.
 
 Then check what it found:
 
@@ -139,6 +165,9 @@ For the desktop app, switch to the profile and sign in when it opens:
 Switch-ClaudeDesktop work -Launch
 ```
 
+On a Store/MSIX install add `-IAcceptTheRisk` (see
+[Windows install types](#windows-install-types)).
+
 ---
 
 ## Daily use
@@ -157,9 +186,16 @@ It is dot-sourced rather than run as a child script, because PowerShell resolves
 empty profile map. Keep the `.` in the `.cmd` if you edit it.
 
 To pin it to the taskbar, make a shortcut whose target is `powershell.exe` with
-the same arguments as the `.cmd` -- Windows won't pin a shortcut to a `.cmd`.
-`claude-launcher.ico` is its icon: Clawd Thinking by
-[Icons8](https://icons8.com).
+the same arguments as the `.cmd` -- Windows won't pin a shortcut to a `.cmd`:
+
+```
+powershell.exe -ExecutionPolicy Bypass -NoLogo -Command ". 'C:\path\to\claude-launcher.ps1'"
+```
+
+Give the shortcut `claude-launcher.ico` as its icon (right-click the shortcut ->
+Properties -> Change Icon -> browse to the file) - Clawd Thinking by
+[Icons8](https://icons8.com). Then pin it: drag the shortcut onto the taskbar,
+or right-click -> Pin to taskbar if that option is offered.
 
 **Claude Code CLI**
 
@@ -231,53 +267,24 @@ for the wiring each profile needs.
 **Local models (Ollama)**
 
 Launcher `[l]` lists the installed [Ollama](https://ollama.com) models that can
-call tools, then offers context sizes (64k/128k/256k, or type one like `96k`)
-and a project folder (the last five used, `b` for a folder picker, or a pasted
-path), and runs Claude Code in that window. `/exit` returns to the menu. From a terminal:
+call tools, then offers a context size and a project folder, and runs Claude
+Code against it in that window. From a terminal:
 
 ```powershell
 Start-ClaudeLocal qwen3.5:9b -Path C:\src\app
 Start-ClaudeLocal qwen3.5:9b -Context 98304 -- --continue   # Claude's flags go after --
 ```
 
-It uses Ollama's built-in Anthropic endpoint, so no router or proxy is needed.
-Sessions live in `~/.claude-local`, which has no account, plugins, hooks or
-`CLAUDE.md`. Each of those would spend context a small model can't spare, and
-local sessions would fill an account's history and claude-mem store. The desktop
-profile and its worker are left alone.
+It talks to Ollama's built-in Anthropic endpoint directly, so no router or
+proxy is needed. Sessions live in `~/.claude-local` - no account, plugins,
+hooks or `CLAUDE.md` - so a small model doesn't burn context on any of that,
+and local sessions never touch an account's history or claude-mem store. It
+pins the model's context window (Ollama otherwise loads its full trained size)
+and caps Claude Code's reply budget to fit; only Bash, Read, Edit, Write, Glob
+and Grep are offered by default (`-AllTools` restores the rest).
 
-**Terminal only.** The desktop app can't do this. It forces Anthropic's API
-address into every Code tab. Its third-party inference mode (Developer →
-Configure Third-Party Inference) accepts a gateway URL, but it drops model names
-it recognises as non-Claude (`qwen`, `llama`, `gemma` and so on).
-
-What `Start-ClaudeLocal` sets, and why:
-
-- **Context size, on both sides.** Ollama loads a model at its full trained
-  window unless told otherwise. Its Anthropic endpoint ignores per-request
-  options, so the function creates `cc-local`, a derived model with `num_ctx`
-  pinned. It shares the original's weights, so it takes no extra disk. Claude
-  Code assumes 200k for a model it doesn't know, so
-  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` makes it auto-compact before Ollama truncates.
-- **Every model slot points at `cc-local`,** so background calls and subagents
-  stay local too.
-- **The reply reservation is capped at 8k** (`CLAUDE_CODE_MAX_OUTPUT_TOKENS`).
-  The default takes most of a 64k window.
-- **Only Bash, Read, Edit, Write, Glob and Grep are offered.** `-AllTools`
-  restores the rest.
-
-Measured on 2026-09-11 (RTX 3060 Ti 8 GB, 32 GB RAM, Ollama 0.23, Claude Code
-2.1.268):
-
-| | |
-|---|---|
-| Claude Code's per-turn overhead | ~7k tokens with the default tools, ~17k with `-AllTools` |
-| 32k context | fails: "Prompt is too long", or auto-compact thrashes |
-| 64k context | works |
-| Qwen3.5-4B at 64k | 8.1 GB, 24% on CPU; edited a file correctly in 8 turns |
-| Same model with no context cap | Ollama loads 256k: 15 GB, 67% on CPU |
-| Qwen3.5-4B with `-AllTools` | lost track and asked for file permission it already had |
-| `qwen2.5-coder:7b` | writes tool calls as plain text instead of making them. It advertises tool support, so it still appears in the list, but it can't drive Claude Code |
+**Terminal only** - the desktop app forces Anthropic's API address into every
+Code tab and has no way to point it at Ollama instead.
 
 ---
 
@@ -325,6 +332,27 @@ from inside a session with `/plugin` instead.
 
 Existing keys aren't overwritten unless you pass `-Overwrite`. A `.bak` is written
 before any settings merge.
+
+### Porting to a brand-new machine
+
+`Copy-ClaudeConventions` copies between two profile directories on the machine
+it runs on - it has nothing to read from on a machine that's never had this
+repo. To seed someone else's profile with your conventions, copy your own
+`.claude` folder there directly (USB, network share, zip - whatever), rename it
+to match their profile's directory (e.g. `.claude-work`), then **delete these
+before it's ever used**, since a raw folder copy carries them too and that's
+your login and history, not theirs:
+
+```
+.claude.json  .credentials.json  sessions  projects  history  todos
+shell-snapshots  statsig  cache  backups  file-history  ide
+```
+
+Also delete the `plugins` folder. Plugin caches are per-machine; a copied one
+makes the new profile think plugins are installed that it has no cache for,
+and hooks then fire against a half-installed copy and block prompts (same
+failure mode as the `enabledPlugins` warning in Troubleshooting below) - let
+them reinstall from `/plugin` instead.
 
 ---
 
