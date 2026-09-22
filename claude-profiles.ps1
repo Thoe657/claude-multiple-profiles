@@ -547,7 +547,7 @@ function Get-ClaudeMemPort {
     param([Parameter(Mandatory, Position = 0)][string]$DataDir)
 
     try {
-        $p = (Get-Content -LiteralPath (Join-Path $DataDir 'settings.json') -Raw |
+        $p = (Get-Content -LiteralPath (Join-Path $DataDir 'settings.json') -Raw -ErrorAction Stop |
               ConvertFrom-Json).CLAUDE_MEM_WORKER_PORT
         if ($p) { return [int]$p }
     } catch { }
@@ -585,7 +585,7 @@ function Get-ClaudeMemWorkerStatus {
 
         $workerPid = $null
         try {
-            $workerPid = (Get-Content -LiteralPath (Join-Path $data 'supervisor.json') -Raw |
+            $workerPid = (Get-Content -LiteralPath (Join-Path $data 'supervisor.json') -Raw -ErrorAction Stop |
                           ConvertFrom-Json).processes.worker.pid
         } catch { }
 
@@ -626,7 +626,7 @@ function Stop-ClaudeMemWorker {
 
     $workerPid = $null
     try {
-        $workerPid = (Get-Content -LiteralPath (Join-Path $data 'supervisor.json') -Raw |
+        $workerPid = (Get-Content -LiteralPath (Join-Path $data 'supervisor.json') -Raw -ErrorAction Stop |
                       ConvertFrom-Json).processes.worker.pid
     } catch { }
 
@@ -677,7 +677,7 @@ function Start-ClaudeMemWorker {
     }
 
     $settings = $null
-    try { $settings = Get-Content -LiteralPath (Join-Path $dir 'settings.json') -Raw | ConvertFrom-Json } catch { }
+    try { $settings = Get-Content -LiteralPath (Join-Path $dir 'settings.json') -Raw -ErrorAction Stop | ConvertFrom-Json } catch { }
     # The worker checks this itself and exits 0 without a word, so say it here.
     if ($settings -and $settings.enabledPlugins.'claude-mem@thedotmack' -eq $false) {
         Write-Host "claude-mem is disabled on '$profileName' (enabledPlugins in settings.json) -- its worker will not start" -ForegroundColor DarkYellow
